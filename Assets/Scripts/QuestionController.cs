@@ -1,112 +1,184 @@
 using UnityEngine;
-using UnityEngine.UI;
-using TMPro;
+using UnityEngine.UI; // UI要素を扱うために必要
+using UnityEngine.Networking; // Webリクエストを扱うために必要
 using System.Collections;
-using UnityEngine.Networking;
 
-public class QuestionController : MonoBehaviour
+// --- このスクリプトの使い方 ---
+// 1. Unityで空のGameObjectを作成し、「QuizManager」と名付けます。
+// 2. このスクリプトを、作成した「QuizManager」GameObjectにアタッチします。
+// 3. 画面に問題文、選択肢A/Bのボタン、解説などを表示するためのUI TextとButtonを作成します。
+// 4. インスペクター上で、このスクリプトの各UI参照（questionTextなど）に、作成したUI要素をドラッグ＆ドロップで設定します。
+// 5. 選択肢A/BのボタンのOnClick()イベントに、このスクリプトのAnswerButtonPressed("A") / AnswerButtonPressed("B")をそれぞれ設定します。
+
+public class QuizManager : MonoBehaviour
 {
-    // --- ウェイターが使う道具（UI要素）を、後でUnityエディタから設定する場所 ---
-    public TextMeshProUGUI questionText;
+    // --- API設定 ---
+    // あなたがデプロイしたAPIのURLを設定します
+    private const string API_URL = "http://Quizgame-env.eba-ia2gsrsb.ap-southeast-2.elasticbeanstalk.com/quiz";
+
+    // --- UI参照 ---
+    // Unityエディタのインスペクターから、対応するUI要素をアタッチしてください
+    [Header("UI References")]
+    public Text questionText;       // 問題文を表示するText
+    public Text choiceAText;        // 選択肢Aのボタン内Text
+    public Text choiceBText;        // 選択肢Bのボタン内Text
+    public Text resultText;         // 正解/不正解を表示するText
+    public Text explanationText;    // 解説文を表示するText
+
+    [Header("UI Buttons")]
     public Button choiceAButton;
     public Button choiceBButton;
-    public Button generateButton;
-    public TextMeshProUGUI resultText;
+    public Button nextQuizButton;   // 次の問題へ進むボタン
 
-    // --- キッチンの住所 ---
-    private string serverUrl = "http://127.0.0.1:5000/quiz";
+    // --- 内部データ ---
+    private QuizData currentQuiz; // 現在表示しているクイズのデータ
+    private bool isAnswered = false; // 回答済みかどうかのフラグ
 
-    // --- 受け取った料理（クイズデータ）を一時的に置くお皿 ---
-    private QuizData currentQuiz;
+    // --- JSONの構造に対応するC#クラス ---
+    // JSONをパースするために、キー名と変数名を一致させる必要があります
+    [System.Serializable]
+    private class QuizData
+    {
+        public string question;
+        public OptionsData options;
+        public string explanation_A;
+        public string explanation_B;
+        public string answer;
+    }
 
-    // --- 仕事開始時の準備 ---
+    [System.Serializable]
+    private class OptionsData
+    {
+        public string A;
+        public string B;
+    }
+
+
+    // --- メイン処理 ---
+
     void Start()
     {
-        // 最初はボタンなどを隠しておく
-        questionText.text = "下のボタンを押して、キッチンからクイズをもらいましょう！";
-        resultText.text = "";
-        choiceAButton.gameObject.SetActive(false);
-        choiceBButton.gameObject.SetActive(false);
-
-        // 「問題生成」ボタンが押されたら、キッチンに注文を出すように設定
-        generateButton.onClick.AddListener(OnGenerateButtonClicked);
-        // 選択肢A/Bのボタンが押されたら、答え合わせをするように設定
-        choiceAButton.onClick.AddListener(() => OnChoiceSelected(0));
-        choiceBButton.onClick.AddListener(() => OnChoiceSelected(1));
+        // ゲーム開始時に最初のクイズを取得
+        FetchNewQuiz();
     }
 
-    // --- 「問題生成」ボタンが押された時の行動 ---
-    void OnGenerateButtonClicked()
+    /// <summary>
+    /// 新しいクイズを取得して画面を更新する
+    /// </summary>
+    public void FetchNewQuiz()
     {
-        // 「キッチンに注文を出す」という行動を開始する
-        StartCoroutine(GetQuizFromServer());
+        // UIを初期状態に戻す
+        resultText.text = "";
+        explanationText.text = "";
+        isAnswered = false;
+        SetButtonsInteractable(true); // ボタンを押せるようにする
+        nextQuizButton.gameObject.SetActive(false); // 「次の問題へ」ボタンを隠す
+
+        // API通信をコルーチンで開始
+        StartCoroutine(GetQuizDataCoroutine());
     }
 
-    // --- キッチンに注文を出し、料理が届くまで待つ一連の行動 ---
-    IEnumerator GetQuizFromServer()
+    /// <summary>
+    /// APIからクイズデータを非同期で取得するコルーチン
+    /// </summary>
+    private IEnumerator GetQuizDataCoroutine()
     {
-        // 注文中はボタンを非表示にしたり、メッセージを変えたりする
-        generateButton.interactable = false;
-        questionText.text = "キッチンに注文中です...";
-        resultText.text = "";
-        choiceAButton.gameObject.SetActive(false);
-        choiceBButton.gameObject.SetActive(false);
-
-        // UnityWebRequestという道具を使って、キッチンの住所に注文を出す
-        using (UnityWebRequest webRequest = UnityWebRequest.Get(serverUrl))
+        // GETリクエストを作成
+        using (UnityWebRequest webRequest = UnityWebRequest.Get(API_URL))
         {
-            // 料理が届くまで待つ
+            // リクエストを送信し、応答を待つ
             yield return webRequest.SendWebRequest();
 
-            // 料理が無事に届いたら（通信成功）
-            if (webRequest.result == UnityWebRequest.Result.Success)
+            // エラーハンドリング
+            if (webRequest.result == UnityWebRequest.Result.ConnectionError || webRequest.result == UnityWebRequest.Result.ProtocolError)
             {
-                // 届いたJSON形式のデータを、注文伝票（QuizData）の形に変換する
-                currentQuiz = JsonUtility.FromJson<QuizData>(webRequest.downloadHandler.text);
-                // 料理をお客さんに見せる
-                DisplayQuiz();
+                Debug.LogError("API Error: " + webRequest.error);
+                questionText.text = "クイズの取得に失敗しました。\nネットワーク接続を確認してください。";
             }
-            // 注文に失敗したら
             else
             {
-                questionText.text = "厨房との通信に失敗しました。サーバーは起動していますか？";
-                Debug.LogError("Server Error: " + webRequest.error);
+                // 成功した場合、受信したJSONテキストをパース
+                string jsonResponse = webRequest.downloadHandler.text;
+                Debug.Log("Received JSON: " + jsonResponse); // 受信したJSONをログに出力
+                currentQuiz = JsonUtility.FromJson<QuizData>(jsonResponse);
+
+                // UIにクイズ内容を表示
+                DisplayQuiz();
             }
         }
-        // 注文が終わったら、またボタンを押せるようにする
-        generateButton.interactable = true;
     }
 
-    // --- 届いた料理（クイズ）をお客さんに見せる行動 ---
-    void DisplayQuiz()
+    /// <summary>
+    /// 取得したクイズデータをUIに表示する
+    /// </summary>
+    private void DisplayQuiz()
     {
         questionText.text = currentQuiz.question;
-        choiceAButton.GetComponentInChildren<TextMeshProUGUI>().text = currentQuiz.options[0];
-        choiceBButton.GetComponentInChildren<TextMeshProUGUI>().text = currentQuiz.options[1];
-
-        choiceAButton.gameObject.SetActive(true);
-        choiceBButton.gameObject.SetActive(true);
-        choiceAButton.interactable = true;
-        choiceBButton.interactable = true;
+        choiceAText.text = currentQuiz.options.A;
+        choiceBText.text = currentQuiz.options.B;
     }
 
-    // --- 答え合わせをする行動 ---
-    void OnChoiceSelected(int choiceIndex)
+    /// <summary>
+    /// 選択肢ボタンが押されたときに呼び出される
+    /// </summary>
+    /// <param name="selectedChoice">押された選択肢 ("A" or "B")</param>
+    public void AnswerButtonPressed(string selectedChoice)
     {
-        // 正解かどうかを判定
-        if (currentQuiz.options[choiceIndex] == currentQuiz.answer)
+        // --- ▼▼▼ デバッグログを追加 ▼▼▼ ---
+        Debug.Log($"ボタンが押されました！ 選んだ選択肢: '{selectedChoice}'");
+
+        if (isAnswered)
         {
-            resultText.text = "正解！お見事！";
+            Debug.LogWarning("すでに回答済みのため処理をスキップします。");
+            return;
+        }
+        isAnswered = true;
+
+        if (currentQuiz == null)
+        {
+            Debug.LogError("クイズデータ(currentQuiz)がありません。回答を処理できません。");
+            return;
+        }
+
+        Debug.Log($"正解は '{currentQuiz.answer}' です。'{selectedChoice}' と比較します。");
+        // --- ▲▲▲ デバッグログを追加 ▲▲▲ ---
+
+        // ボタンを無効化する
+        SetButtonsInteractable(false);
+
+        // 正誤判定
+        if (selectedChoice == currentQuiz.answer)
+        {
+            resultText.text = "正解！";
             resultText.color = Color.green;
         }
         else
         {
-            resultText.text = $"残念... 正解は「{currentQuiz.answer}」でした";
+            resultText.text = "不正解…";
             resultText.color = Color.red;
         }
 
-        // 一度答えたら、ボタンを押せなくする
-        choiceAButton.interactable = false;
-        choiceBButton.interactable = false;
+        // 解説を表示
+        // 正解の選択肢の解説を表示する
+        if (currentQuiz.answer == "A")
+        {
+            explanationText.text = currentQuiz.explanation_A;
+        }
+        else
+        {
+            explanationText.text = currentQuiz.explanation_B;
+        }
+
+        // 「次の問題へ」ボタンを表示
+        nextQuizButton.gameObject.SetActive(true);
+    }
+
+    /// <summary>
+    /// 選択肢ボタンの有効/無効を切り替える
+    /// </summary>
+    private void SetButtonsInteractable(bool interactable)
+    {
+        choiceAButton.interactable = interactable;
+        choiceBButton.interactable = interactable;
     }
 }
