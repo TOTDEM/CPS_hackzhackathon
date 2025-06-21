@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ユーザースコアランキング</title>
+    <!-- Tailwind CSS CDN for easy styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* カスタムフォントと背景色の設定 */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f0f2f5; /* 明るいグレーの背景 */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh; /* ビューポート全体に高さを確保 */
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            background-color: #ffffff;
+            padding: 2.5rem; /* パディングを増やす */
+            border-radius: 1.5rem; /* 角をさらに丸くする */
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1); /* 柔らかい影 */
+            max-width: 600px; /* 最大幅を設定 */
+            width: 100%;
+            text-align: center;
+        }
+        h1 {
+            font-size: 2.25rem; /* 大きな見出し */
+            font-weight: 700; /* 太字の見出し */
+            color: #1f2937; /* 暗いテキスト色 */
+            margin-bottom: 1.5rem; /* 見出しの下にスペース */
+        }
+        .ranking-table {
+            width: 100%;
+            border-collapse: separate; /* ボーダーの間隔を許容 */
+            border-spacing: 0 10px; /* 行の間に間隔を追加 */
+            margin-top: 1.5rem;
+        }
+        .ranking-table th, .ranking-table td {
+            padding: 1rem; /* パディング */
+            text-align: left;
+        }
+        .ranking-table th {
+            background-color: #edf2f7; /* ヘッダーの背景色 */
+            color: #4a5568; /* ヘッダーのテキスト色 */
+            font-weight: 600;
+            text-transform: uppercase; /* 大文字にする */
+            font-size: 0.875rem;
+        }
+        .ranking-table td {
+            background-color: #f7fafc; /* 行の背景色 */
+            border-radius: 0.75rem; /* 行の角を丸くする */
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05); /* 行の影 */
+        }
+        .ranking-table tr:hover td {
+            background-color: #e2e8f0; /* ホバー時の背景色 */
+        }
+        .rank-col {
+            width: 15%; /* ランク列の幅 */
+            text-align: center;
+            font-weight: 700;
+            color: #4f46e5; /* ランクの色を強調 */
+        }
+        .user-id-col {
+            width: 50%; /* ユーザーID列の幅 */
+        }
+        .score-col {
+            width: 35%; /* スコア列の幅 */
+            text-align: right;
+            font-weight: 600;
+            color: #2f855a; /* スコアの色を強調 */
+        }
+        #loadingMessage {
+            margin-top: 1.5rem;
+            color: #4a5568;
+            font-weight: 500;
+        }
+        #errorMessage {
+            margin-top: 1.5rem;
+            color: #e53e3e;
+            font-weight: 600;
+        }
+        .refresh-button {
+            background-color: #10b981; /* 緑色の更新ボタン */
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.75rem;
+            border: none;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 1rem;
+            transition: background-color 0.3s ease, transform 0.2s ease;
+            margin-top: 1.5rem;
+            width: auto; /* 幅を自動調整 */
+            display: inline-block; /* インラインブロック要素にする */
+        }
+        .refresh-button:hover {
+            background-color: #059669; /* ホバーで暗い緑色 */
+            transform: translateY(-2px);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>ユーザーランキング</h1>
+        <button id="refreshButton" class="refresh-button">ランキングを更新</button>
+        <div id="loadingMessage" class="hidden">スコアを読み込み中...</div>
+        <div id="errorMessage" class="hidden"></div>
+        <table class="ranking-table" id="rankingTable">
+            <thead>
+                <tr>
+                    <th class="rank-col">ランク</th>
+                    <th class="user-id-col">ユーザーID</th>
+                    <th class="score-col">スコア</th>
+                </tr>
+            </thead>
+            <tbody id="rankingTableBody">
+                <!-- ランキングデータはJavaScriptによってここに挿入されます -->
+            </tbody>
+        </table>
+    </div>
+
+    <script>
+        // FastAPIサーバーのベースURL。サーバーの実行場所に合わせて変更してください。
+        // 例: http://127.0.0.1:8000
+        const API_BASE_URL = "http://127.0.0.1:8000";
+
+        const rankingTableBody = document.getElementById('rankingTableBody');
+        const loadingMessage = document.getElementById('loadingMessage');
+        const errorMessage = document.getElementById('errorMessage');
+        const refreshButton = document.getElementById('refreshButton'); // 更新ボタンの要素を取得
+
+        /**
+         * サーバーからすべてのユーザーのスコアを取得し、ランキングとして表示します。
+         */
+        async function fetchAndDisplayRanking() {
+            loadingMessage.classList.remove('hidden'); // ローディングメッセージを表示
+            errorMessage.classList.add('hidden'); // エラーメッセージを非表示にする
+            rankingTableBody.innerHTML = ''; // 既存のランキングをクリア
+
+            try {
+                const url = `${API_BASE_URL}/users`;
+                const response = await fetch(url);
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(`HTTP Error: ${response.status} - ${errorData.detail || '不明なエラー'}`);
+                }
+
+                const users = await response.json();
+
+                // スコアで降順にソート
+                users.sort((a, b) => b.score - a.score);
+
+                if (users.length === 0) {
+                    rankingTableBody.innerHTML = '<tr><td colspan="3" class="text-center py-4">まだユーザーがいません。</td></tr>';
+                    return;
+                }
+
+                // 各ユーザーのデータを行としてテーブルに追加
+                users.forEach((user, index) => {
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td class="rank-col">${index + 1}</td>
+                        <td class="user-id-col">${user.user_id}</td>
+                        <td class="score-col">${user.score}</td>
+                    `;
+                    rankingTableBody.appendChild(row);
+                });
+
+            } catch (error) {
+                console.error('ランキングの取得中にエラーが発生しました:', error);
+                errorMessage.textContent = `ランキングの取得に失敗しました: ${error.message}`;
+                errorMessage.classList.remove('hidden');
+            } finally {
+                loadingMessage.classList.add('hidden'); // ローディングメッセージを非表示にする
+            }
+        }
+
+        // ページがロードされたときにランキングを読み込む
+        document.addEventListener('DOMContentLoaded', fetchAndDisplayRanking);
+
+        // 「更新」ボタンがクリックされたときにランキングを再読み込みする
+        refreshButton.addEventListener('click', fetchAndDisplayRanking);
+
+        // オプション: 定期的にランキングを更新する (例: 10秒ごと)
+        // サーバーへの負荷に注意してください。
+        setInterval(fetchAndDisplayRanking, 10000); // 10秒ごとに自動更新
+    </script>
+</body>
+</html>
